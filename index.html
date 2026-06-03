@@ -1,0 +1,373 @@
+
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Isometric MOBA Map</title>
+<style>
+body{
+    margin:0;
+    background:#111;
+    overflow:hidden;
+    touch-action:none;
+}
+canvas{
+    display:block;
+    position:fixed;
+    top:0;
+    left:0;
+    width:100%;
+    height:100%;
+}
+#altHUD{
+    position:fixed;
+    top:12px;
+    left:12px;
+    background:rgba(0,0,0,0.55);
+    color:#fff;
+    font:14px monospace;
+    padding:6px 14px;
+    border-radius:6px;
+    pointer-events:none;
+    z-index:10;
+    user-select:none;
+}
+#zoomBtns{
+    position:fixed;
+    bottom:24px;
+    right:24px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    z-index:10;
+}
+#zoomBtns button{
+    width:48px;
+    height:48px;
+    font:22px monospace;
+    background:rgba(0,0,0,0.55);
+    color:#fff;
+    border:1px solid rgba(255,255,255,0.2);
+    border-radius:8px;
+    cursor:pointer;
+    user-select:none;
+    -webkit-tap-highlight-color:transparent;
+}
+#zoomBtns button:active{
+    background:rgba(0,0,0,0.8);
+}
+#joystick{
+    position:fixed;
+    bottom:100px;
+    left:40px;
+    width:130px;
+    height:130px;
+    border-radius:50%;
+    background:rgba(255,255,255,0.1);
+    border:2px solid rgba(255,255,255,0.25);
+    z-index:10;
+    touch-action:none;
+}
+#jKnob{
+    position:absolute;
+    top:50%;
+    left:50%;
+    width:50px;
+    height:50px;
+    border-radius:50%;
+    background:rgba(255,255,255,0.45);
+    transform:translate(-50%,-50%);
+    pointer-events:none;
+    transition:transform 0.05s;
+}
+</style>
+</head>
+<body>
+
+<div id="altHUD">Alt: 5m &nbsp;|&nbsp; Spd: 0.0 &nbsp;|&nbsp; X: 12.0 Y: 12.0 &nbsp;|&nbsp; ∠: 20.6° &nbsp;|&nbsp; Map: 30×30 &nbsp;|&nbsp; Scale: 6.0x &nbsp;|&nbsp; Ratio: 64×24</div>
+<div id="zoomBtns">
+    <button id="zoomIn">+</button>
+    <button id="zoomOut">−</button>
+</div>
+<div id="joystick"><div id="jKnob"></div></div>
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const BASE_TILE_W = 64;
+const BASE_TILE_H = 24;
+const SIZE = 30;
+const MIN_ALT = 5;
+const MAX_ALT = 60;
+
+let altitude = 5;
+let W, H, Y_OFF;
+
+let heroX = 12, heroY = 12;
+let camX = 0, camY = 0;
+let jDirX = 0, jDirY = 0;
+const HERO_SPEED = 0.5;
+
+function resizeCanvas(){
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    Y_OFF = H * 0.12;
+    render();
+}
+
+function tileW() { return BASE_TILE_W * (30 / altitude); }
+function tileH() { return BASE_TILE_H * (30 / altitude); }
+
+function iso(x,y){
+    return {
+        x:(x-y)*tileW()/2 + W/2 - camX,
+        y:(x+y)*tileH()/2 + Y_OFF - camY
+    };
+}
+
+function centerOn(hx, hy){
+    const rawX = (hx - hy) * tileW() / 2;
+    const rawY = (hx + hy) * tileH() / 2 + Y_OFF;
+    camX = rawX - W/2;
+    camY = rawY - H/2;
+}
+
+function diamond(x,y,color){
+    const p = iso(x,y);
+    const tw = tileW();
+    const th = tileH();
+
+    ctx.fillStyle=color;
+    ctx.beginPath();
+    ctx.moveTo(p.x,p.y);
+    ctx.lineTo(p.x+tw/2,p.y+th/2);
+    ctx.lineTo(p.x,p.y+th);
+    ctx.lineTo(p.x-tw/2,p.y+th/2);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle="rgba(0,0,0,0.15)";
+    ctx.stroke();
+}
+
+function lane(x1,y1,x2,y2,width=2){
+    let dx=x2-x1;
+    let dy=y2-y1;
+    let len=Math.max(Math.abs(dx),Math.abs(dy));
+
+    for(let i=0;i<=len;i++){
+        let px=x1+(dx*i/len);
+        let py=y1+(dy*i/len);
+        for(let w=-width;w<=width;w++){
+            diamond(Math.round(px),Math.round(py+w),"#d8c8a2");
+        }
+    }
+}
+
+function drawBase(tx,ty){
+    const p=iso(tx,ty);
+    const scale = 30 / altitude;
+
+    ctx.fillStyle="#f0f0f0";
+    ctx.beginPath();
+    ctx.arc(p.x,p.y+15*scale,40*scale,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle="#888";
+    ctx.beginPath();
+    ctx.arc(p.x,p.y+15*scale,15*scale,0,Math.PI*2);
+    ctx.fill();
+}
+
+let treePositions = [];
+for(let i=0;i<120;i++){
+    treePositions.push({
+        x: Math.random()*SIZE,
+        y: Math.random()*SIZE
+    });
+}
+
+function render(){
+    ctx.clearRect(0,0,W,H);
+
+    centerOn(heroX, heroY);
+
+    // GRASS
+    for(let y=0;y<SIZE;y++){
+        for(let x=0;x<SIZE;x++){
+            diamond(x,y,"#7eb85c");
+        }
+    }
+
+    // TOP LANE
+    lane(2,2,10,2,2);
+    lane(10,2,20,8,2);
+
+    // BOTTOM LANE
+    lane(2,20,14,20,2);
+    lane(14,20,20,14,2);
+
+    // MID LANE
+    lane(4,18,18,4,2);
+
+    // RIVER
+    for(let i=0;i<16;i++){
+        for(let w=-1;w<=1;w++){
+            diamond(4+i,4+i+w,"#79c8ff");
+        }
+    }
+
+    drawBase(1,22);
+    drawBase(22,1);
+
+    // TREES
+    const scale = 30 / altitude;
+    for(let t of treePositions){
+        const p=iso(t.x,t.y);
+        ctx.fillStyle="#2f6b2f";
+        ctx.beginPath();
+        ctx.arc(p.x,p.y+10*scale,4*scale,0,Math.PI*2);
+        ctx.fill();
+    }
+
+    // HERO (fixed at screen center)
+    const heroR = 5 * (30 / altitude);
+
+    ctx.fillStyle = "#44ddff";
+    ctx.beginPath();
+    ctx.arc(W/2, H/2, heroR, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1.5 * (30 / altitude);
+    ctx.beginPath();
+    ctx.arc(W/2, H/2, heroR, 0, Math.PI*2);
+    ctx.stroke();
+
+    // UPDATE ALTITUDE & SPEED HUD (HTML overlay)
+    const spd = Math.hypot(jDirX, jDirY) * HERO_SPEED * (30 / altitude);
+    const angle = Math.atan2(BASE_TILE_H, BASE_TILE_W) * 180 / Math.PI;
+    const isoScale = 30 / altitude;
+    document.getElementById("altHUD").textContent = "Alt: "+altitude+"m  |  Spd: "+spd.toFixed(1)+"  |  X: "+heroX.toFixed(1)+" Y: "+heroY.toFixed(1)+"  |  ∠: "+angle.toFixed(1)+"°  |  Map: "+SIZE+"×"+SIZE+"  |  Scale: "+isoScale.toFixed(1)+"x  |  Ratio: "+BASE_TILE_W+"×"+BASE_TILE_H;
+}
+
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+
+function changeZoom(delta){
+    altitude += delta;
+    altitude = Math.round(Math.max(MIN_ALT, Math.min(MAX_ALT, altitude)));
+    render();
+}
+
+canvas.onwheel = function(e){
+    e.preventDefault();
+    changeZoom(e.deltaY > 0 ? 2 : -2);
+};
+
+document.getElementById("zoomIn").onclick = function(){ changeZoom(-2); };
+document.getElementById("zoomOut").onclick = function(){ changeZoom(2); };
+
+// TOUCH PINCH ZOOM
+let lastTouchDist = 0;
+
+canvas.ontouchstart = function(e){
+    if(e.touches.length === 2){
+        const t = e.touches;
+        lastTouchDist = Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+    }
+};
+
+canvas.ontouchmove = function(e){
+    if(e.touches.length === 2){
+        e.preventDefault();
+        const t = e.touches;
+        const dist = Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+        const diff = lastTouchDist - dist;
+        if(Math.abs(diff) > 8){
+            changeZoom(diff > 0 ? 2 : -2);
+            lastTouchDist = dist;
+        }
+    }
+};
+
+// JOYSTICK
+const jEl = document.getElementById("joystick");
+const jKnob = document.getElementById("jKnob");
+const jRect = {x:0, y:0, r:65};
+
+function updateJRect(){
+    const r = jEl.getBoundingClientRect();
+    jRect.x = r.left + r.width/2;
+    jRect.y = r.top + r.height/2;
+    jRect.r = r.width/2;
+}
+
+let jActive = false;
+
+function jStart(e){
+    e.preventDefault();
+    jActive = true;
+    updateJRect();
+}
+
+function jMove(e){
+    e.preventDefault();
+    if(!jActive) return;
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    let dx = cx - jRect.x;
+    let dy = cy - jRect.y;
+    const dist = Math.hypot(dx, dy);
+    const maxDist = jRect.r - 25;
+    if(dist > maxDist){
+        dx = dx / dist * maxDist;
+        dy = dy / dist * maxDist;
+    }
+    jKnob.style.transform = "translate(calc(-50% + "+dx+"px), calc(-50% + "+dy+"px))";
+    if(dist > 10){
+        jDirX = dx / maxDist;
+        jDirY = dy / maxDist;
+    } else {
+        jDirX = 0;
+        jDirY = 0;
+    }
+}
+
+function jEnd(e){
+    jActive = false;
+    jDirX = 0;
+    jDirY = 0;
+    jKnob.style.transform = "translate(-50%,-50%)";
+    render();
+}
+
+jEl.addEventListener("pointerdown", jStart);
+window.addEventListener("pointermove", jMove);
+window.addEventListener("pointerup", jEnd);
+window.addEventListener("resize", updateJRect);
+
+// GAME LOOP
+let lastTime = 0;
+function loop(t){
+    const dt = Math.min((t - lastTime) / 1000, 0.05);
+    lastTime = t;
+    if(jDirX !== 0 || jDirY !== 0){
+        const s = HERO_SPEED * (30 / altitude) * dt;
+        heroX += jDirX * s;
+        heroY += jDirY * s;
+        heroX = Math.max(-2, Math.min(SIZE+2, heroX));
+        heroY = Math.max(-2, Math.min(SIZE+2, heroY));
+        render();
+    }
+    requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+
+</body>
+</html>
+
